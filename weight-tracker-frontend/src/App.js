@@ -33,6 +33,7 @@ function App() {
   const [editWeight, setEditWeight] = useState('');
   const [editDate, setEditDate] = useState('');
   const [editId, setEditId] = useState(null); // Track which entry is being edited
+  const chartRef = React.useRef(null);
 
   useEffect(() => {
     fetch('/api/weights')
@@ -108,15 +109,35 @@ function App() {
       .catch((error) => console.error('Error deleting weight:', error));
   };
 
-  // Sort weights by date
-  const sortedWeights = [...weights].sort((a, b) => new Date(a.date) - new Date(b.date));
+  // Process the weights to keep only the lowest weight for each date
+  const processLowestWeights = (weights) => {
+    const weightsByDate = {};
+    
+    // Group weights by date and find the lowest for each date
+    weights.forEach(entry => {
+      if (!weightsByDate[entry.date] || entry.weight < weightsByDate[entry.date].weight) {
+        weightsByDate[entry.date] = entry;
+      }
+    });
+    
+    // Convert object back to array
+    return Object.values(weightsByDate);
+  };
+
+  // Sort weights by date and process to keep only lowest per date
+  const sortedLowestWeights = processLowestWeights([...weights].sort((a, b) => new Date(a.date) - new Date(b.date)));
+  
+  // Calculate max weight for y-axis scaling
+  const maxWeight = weights.length > 0 
+    ? Math.max(...weights.map(entry => parseFloat(entry.weight))) + 10
+    : 100; // Default if no data
 
   const chartData = {
-    labels: sortedWeights.map((entry) => entry.date),
+    labels: sortedLowestWeights.map((entry) => entry.date),
     datasets: [
       {
-        label: 'Weight Over Time',
-        data: sortedWeights.map((entry) => entry.weight),
+        label: 'Lowest Weight Each Day',
+        data: sortedLowestWeights.map((entry) => entry.weight),
         borderColor: 'rgba(75, 192, 192, 1)',
         backgroundColor: 'rgba(75, 192, 192, 0.2)',
         pointBackgroundColor: 'rgba(75, 192, 192, 1)',
@@ -128,7 +149,7 @@ function App() {
 
   const chartOptions = {
     responsive: true,
-    maintainAspectRatio: false, // Allow custom height
+    maintainAspectRatio: false,
     plugins: {
       legend: {
         position: 'top',
@@ -139,15 +160,26 @@ function App() {
       },
       zoom: {
         pan: {
-          enabled: true, // Enable panning
-          mode: 'xy',    // Allow panning both horizontally and vertically
+          enabled: false, // Disable panning to prevent the odd scale issues
         },
         zoom: {
-          enabled: true,  // Enable zooming
-          mode: 'xy',     // Allow zooming both horizontally and vertically
-          speed: 0.1,     // Control the zooming speed
+          wheel: {
+            enabled: true,
+            speed: 0.1, // Moderate zoom speed
+          },
+          pinch: {
+            enabled: true
+          },
+          mode: 'y', // Only zoom on y-axis to prevent date axis distortion
         },
       },
+      tooltip: {
+        callbacks: {
+          label: function(context) {
+            return `${context.parsed.y} kg`;
+          }
+        }
+      }
     },
     scales: {
       x: {
@@ -163,8 +195,47 @@ function App() {
           display: true,
           text: 'Weight (kg)',
         },
+        min: 0, // Start from 0
+        max: maxWeight, // Go to max weight + 10
+        // Add dashed grid lines at every 10kg
+        grid: {
+          color: function(context) {
+            // Check if it's a major grid line (every 10 units)
+            if (context.tick.value % 10 === 0) {
+              return 'rgba(0, 0, 0, 0.2)'; // Darker for major grid lines
+            }
+            return 'rgba(0, 0, 0, 0.05)'; // Lighter for minor grid lines
+          },
+          lineWidth: function(context) {
+            // Make the grid line thicker and dashed for every 10kg
+            if (context.tick.value % 10 === 0) {
+              return 1.5;
+            }
+            return 0.5;
+          },
+          drawTicks: true,
+          drawBorder: true,
+          drawOnChartArea: true,
+          borderDash: function(context) {
+            // Make the line dashed for every 10kg
+            if (context.tick.value % 10 === 0) {
+              return [5, 5]; // Dashed line pattern
+            }
+            return [0, 0]; // Solid line for minor grid lines
+          }
+        }
       },
     },
+  };
+
+  // Sort all weights by date for the table view
+  const allSortedWeights = [...weights].sort((a, b) => new Date(b.date) - new Date(a.date));
+  
+  // Reset zoom handler
+  const resetZoom = () => {
+    if (chartRef && chartRef.current) {
+      chartRef.current.resetZoom();
+    }
   };
 
   return (
@@ -218,12 +289,27 @@ function App() {
           >
             Update Weight
           </button>
+          <button
+            type="button"
+            onClick={() => setEditId(null)}
+            className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+          >
+            Cancel
+          </button>
         </form>
       )}
 
       {/* Chart */}
       <div className="mb-6" style={{ height: '500px' }}>
-        <Line data={chartData} options={chartOptions} />
+        <div className="flex justify-end mb-2">
+          <button
+            onClick={resetZoom}
+            className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded"
+          >
+            Reset View
+          </button>
+        </div>
+        <Line data={chartData} options={chartOptions} ref={chartRef} />
       </div>
 
       {/* Weights Table */}
@@ -237,7 +323,7 @@ function App() {
             </tr>
           </thead>
           <tbody>
-            {sortedWeights.map((entry) => (
+            {allSortedWeights.map((entry) => (
               <tr key={entry.id}>
                 <td className="p-2 border">{entry.date}</td>
                 <td className="p-2 border">{entry.weight}</td>
